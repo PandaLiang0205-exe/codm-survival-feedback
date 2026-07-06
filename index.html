@@ -348,9 +348,20 @@ function renderSubmit(main, type) {
     }
 
     // ── 寫進資料表 ───────────────────────────
+    // 為什麼走 RPC 而不是直接 insert：
+    //   supabase-js v2 的 .insert() 預設會送 Prefer: return=representation,
+    //   PostgREST 對剛 INSERT 的 row 做 RETURNING(等同 SELECT)才回傳。
+    //   但 anon 的 SELECT policy 是 approved=true,新資料 approved=false
+    //   看不到 → 直接 42501 錯誤(即使 INSERT 本身其實成功)。
+    //   改走 SECURITY DEFINER RPC(跟 vote 一樣的 pattern)以擁有者身分
+    //   執行,繞過 anon 的 SELECT 邊界,回傳純 id 給前端。
     status.textContent = t('submitting');
-    const table = isBug ? 'bugs' : 'suggestions';
-    const { error } = await sb.from(table).insert({ title, description, media_url });
+    const rpcName = isBug ? 'submit_bug' : 'submit_suggestion';
+    const { error } = await sb.rpc(rpcName, {
+      t_title: title,
+      t_description: description,
+      t_media_url: media_url
+    });
 
     if (error) {
       status.className = 'status err';
