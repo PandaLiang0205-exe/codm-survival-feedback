@@ -97,6 +97,15 @@ nav a:hover, nav button:hover {
   border-color: var(--border-2);
 }
 
+/* Logout 是「登出」= 中性偏危險動作 → 用淡紅提示,但不搶眼 */
+#logout {
+  color: rgba(230, 57, 70, 0.85);
+}
+#logout:hover {
+  color: var(--bug);
+  border-color: rgba(230, 57, 70, 0.45);
+}
+
 
 /* ─── 內容主容器 ────────────────────────────── */
 main {
@@ -236,6 +245,25 @@ main {
 .votes button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* 語意色:上下票分別給正/負向的視覺線索
+   idle 用同色但降不透明度,hover 才亮起來 → 保留戰術 HUD 的克制感 */
+.votes button[data-vote="up"] {
+  border-color: rgba(109, 191, 70, 0.45);
+  color: rgba(109, 191, 70, 0.85);
+}
+.votes button[data-vote="up"]:hover:not(:disabled) {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.votes button[data-vote="down"] {
+  border-color: rgba(230, 57, 70, 0.45);
+  color: rgba(230, 57, 70, 0.85);
+}
+.votes button[data-vote="down"]:hover:not(:disabled) {
+  border-color: var(--bug);
+  color: var(--bug);
 }
 .vote-label {
   font-family: var(--font-cond);
@@ -387,13 +415,25 @@ main {
   cursor: pointer;
   transition: border-color 0.15s, color 0.15s;
 }
+/* Approve = 綠(允許),Reject = 紅(拒絕) — 一眼認出動作方向。
+   idle 就上色,hover 加深填滿 → 決斷型操作需要視覺確認感。 */
+.admin-actions button[data-action=approve] {
+  border-color: rgba(109, 191, 70, 0.55);
+  color: var(--ok);
+}
 .admin-actions button[data-action=approve]:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #000;
+}
+.admin-actions button[data-action=reject] {
+  border-color: rgba(230, 57, 70, 0.55);
+  color: var(--bug);
 }
 .admin-actions button[data-action=reject]:hover:not(:disabled) {
+  background: var(--bug);
   border-color: var(--bug);
-  color: var(--bug);
+  color: #fff;
 }
 .admin-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
 
