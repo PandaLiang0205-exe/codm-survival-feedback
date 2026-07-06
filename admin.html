@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CoDM Feedback — Admin</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 頁首:brand 用 admin 版本(顯示 // ADMIN) -->
+<header>
+  <div class="brand" data-i18n="brand_admin">CODM // ADMIN</div>
+  <nav>
+    <a href="index.html" data-i18n="nav_home">Home</a>
+    <button id="lang-toggle" data-i18n="lang_toggle">中文</button>
+    <!-- logout 鈕僅在已登入時顯示,由 JS 控制 style.display -->
+    <button id="logout" style="display:none" data-i18n="logout">Logout</button>
+  </nav>
+</header>
+
+<main id="main"></main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="common.js"></script>
+
+<script>
+// ================================================================
+//  admin.html 頁面腳本
+// ----------------------------------------------------------------
+//  兩種狀態,由 sb.auth.getSession() 決定:
+//    - 未登入 → 顯示 email/password 登入表單
+//    - 已登入 → 顯示待審核佇列(bugs + suggestions 混排),
+//              每項可 Approve(UPDATE approved=true)或 Reject(DELETE)
+//
+//  重要安全考量:
+//    - 未登入時「畫面上不會出現任何未審核內容」— 因為 RLS 的
+//      SELECT to authenticated 條件不成立,anon SELECT 只有 approved=true,
+//      這裡我們在 JS 也 gate 一次,不 gate 也不會漏但 UX 較差。
+//    - 就算有人直接改 HTML 讓登入表單消失,DB 端還是擋 —
+//      前端 gate 只是 UX,不是安全防線。
+// ================================================================
+
+
+// 語言切換後重新渲染 → 掛 window.rerender
+window.rerender = render;
+
+
+// ─── 主渲染入口 ───────────────────────────
+async function render() {
+  applyI18n();
+
+  // 檢查目前 session
+  // 有 session → 已登入 → 顯示佇列
+  // 沒 session → 未登入 → 顯示登入表單
+  const { data: { session } } = await sb.auth.getSession();
+
+  const logoutBtn = document.getElementById('logout');
+
+  if (!session) {
+    logoutBtn.style.display = 'none';
+    return renderLogin();
+  }
+
+  // 已登入才顯示 logout 鈕(共用頁首元件,依狀態切換顯隱)
+  logoutBtn.style.display = '';
+  return renderQueue();
+}
+
+
+// ═══════════════════════════════════════════════
+//  [未登入] renderLogin
+// ───────────────────────────────────────────────
+//  Supabase Auth 的 email/password 登入。
+//  之所以「一定要用真的 Supabase Auth」是因為:
+//    - 只有 authenticated role 才符合 RLS 的 update/delete 政策
+//    - 假登入(前端記個 flag)完全繞不過 RLS,行為會壞掉
+// ═══════════════════════════════════════════════
+function renderLogin() {
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <form id="login-form" class="form">
+      <h2>${t('login')}</h2>
+
+      <label>${t('f_email')}
+        <input type="email" name="email" required autocomplete="username">
+      </label>
+
+      <label>${t('f_password')}
+        <input type="password" name="password" required autocomplete="current-password">
+      </label>
+
+      <button type="submit" class="btn">${t('do_login')}</button>
+      <div class="status" id="login-status"></div>
+    </form>
+  `;
+
+  document.getElementById('login-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const form   = ev.currentTarget;
+    const status = form.querySelector('#login-status');
+    const btn    = form.querySelector('button[type=submit]');
+
+    btn.disabled = true;
+    status.className = 'status';
+    status.textContent = '';
+
+    const email    = form.email.value;
+    const password = form.password.value;
+
+    // Supabase 官方 API:signInWithPassword
+    // 成功會自動把 session 存到 localStorage,下一次 getSession 就找得到。
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+
+    if (error) {
+      status.className = 'status err';
+      status.textContent = t('err_prefix') + error.message;
+      btn.disabled = false;
+      return;
+    }
+
+    // 登入成功 → 直接重繪,會走到 renderQueue()
+    render();
+  });
+}
+
+
+// ═══════════════════════════════════════════════
+//  [已登入] renderQueue
+// ───────────────────────────────────────────────
+//  同時抓 bugs 與 suggestions 兩張表的 approved=false 列。
+//  兩個 query 平行跑(Promise.all)節省一個 round-trip。
+//  合併後依 created_at 排序,較舊的先審(避免積壓)。
+// ═══════════════════════════════════════════════
+async function renderQueue() {
+  const main = document.getElementById('main');
+  main.innerHTML = `<div class="empty">${t('loading')}</div>`;
+
+  // 平行抓兩張表
+  const [bugsRes, sugsRes] = await Promise.all([
+    sb.from('bugs')
+      .select('*')
+      .eq('approved', false)
+      .order('created_at', { ascending: true }),
+    sb.from('suggestions')
+      .select('*')
+      .eq('approved', false)
+      .order('created_at', { ascending: true })
+  ]);
+
+  // 錯誤處理:任一失敗都顯示,方便你 debug RLS 有沒有設對
+  if (bugsRes.error || sugsRes.error) {
+    const msg = (bugsRes.error || sugsRes.error).message;
+    main.innerHTML = `<div class="empty">${t('err_prefix')}${esc(msg)}</div>`;
+    return;
+  }
+
+  // 把兩張表的結果標上 __type 好知道要對哪張表下 update/delete
+  const items = [
+    ...(bugsRes.data || []).map(x => ({ ...x, __type: 'bugs' })),
+    ...(sugsRes.data || []).map(x => ({ ...x, __type: 'suggestions' })),
+  ];
+
+  // 依提交時間排序(舊 → 新),先進先審
+  items.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+  if (items.length === 0) {
+    main.innerHTML = `
+      <h2 style="font-family:var(--font-cond);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 20px">
+        ${t('pending_queue')}
+      </h2>
+      <div class="empty">${t('no_pending')}</div>
+    `;
+    return;
+  }
+
+  // 渲染 title + 每一項待審卡片
+  main.innerHTML = `
+    <h2 style="font-family:var(--font-cond);text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin:0 0 20px">
+      ${t('pending_queue')} <span class="mono" style="color:var(--muted);font-size:14px">(${items.length})</span>
+    </h2>
+    ${items.map(renderPendingCard).join('')}
+  `;
+
+  // 綁核准/拒絕鈕的事件
+  main.querySelectorAll('[data-action]').forEach(btn => btn.addEventListener('click', onAction));
+}
+
+
+// ─── 單張待審卡:標題、日期、說明、媒體、核准/拒絕 ─────
+// 相比主頁的卡,這裡直接展開全文與媒體 —— 審核者需要完整資訊,不用點進詳情。
+function renderPendingCard(r) {
+  const isBug = r.__type === 'bugs';
+  const tag   = isBug ? `<span class="tag tag-bug">${t('tag_bug')}</span>` : '';
+  const media = r.media_url ? renderMedia(r.media_url) : '';
+  return `
+    <article class="admin-card">
+      ${tag}
+      <h3 class="card-title">${esc(r.title)}</h3>
+      <div class="card-meta">
+        <span class="mono">#${r.id}</span>
+        <span class="mono">${fmtDate(r.created_at)}</span>
+        <span class="mono" style="color:var(--muted)">${r.__type}</span>
+      </div>
+      <div class="detail-body">${esc(r.description)}</div>
+      ${media}
+      <div class="admin-actions">
+        <button data-action="approve" data-table="${r.__type}" data-id="${r.id}">
+          ${t('approve')}
+        </button>
+        <button data-action="reject"  data-table="${r.__type}" data-id="${r.id}">
+          ${t('reject')}
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+
+// ─── 核准 / 拒絕 動作處理 ────────────────────
+// approve → UPDATE approved=true(該筆立刻出現在主頁)
+// reject  → DELETE(該筆從 DB 消失)
+// 為什麼 reject 用 DELETE 而不是 approved=false?因為它「本來就是」false,
+// 保留只會佔 DB 空間 —— user 設計就是「拒絕即刪除」。
+async function onAction(ev) {
+  const btn = ev.currentTarget;
+  const { action, table, id } = btn.dataset;
+
+  // 鎖同一張卡上的兩顆鈕,避免重複點擊
+  const card = btn.closest('article');
+  card.querySelectorAll('button').forEach(b => b.disabled = true);
+
+  let error;
+  if (action === 'approve') {
+    ({ error } = await sb.from(table).update({ approved: true }).eq('id', Number(id)));
+  } else {
+    ({ error } = await sb.from(table).delete().eq('id', Number(id)));
+  }
+
+  if (error) {
+    // 失敗:解鎖並提示
+    card.querySelectorAll('button').forEach(b => b.disabled = false);
+    alert(error.message);
+    return;
+  }
+
+  // 成功:直接把該卡從 DOM 移掉(不必再打一次列表)
+  card.remove();
+
+  // 若整個佇列空了,顯示 no-pending 訊息
+  if (document.querySelectorAll('.admin-card').length === 0) {
+    renderQueue();  // 重繪一次,會走 no-pending 那條路徑
+  }
+}
+
+
+// ─── 登出鈕:sb.auth.signOut → 清 session → 回登入表單 ──
+document.getElementById('logout').addEventListener('click', async () => {
+  await sb.auth.signOut();
+  render();
+});
+
+
+// ─── 啟動 ────────────────────────────────
+render();
+</script>
+
+</body>
+</html>

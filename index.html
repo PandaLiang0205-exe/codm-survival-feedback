@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CoDM Survival Feedback</title>
+
+  <!-- Google Fonts:窄體 + 等寬。只兩支,加載成本可接受。 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ───────────────────────────────────────────────
+     頁首:品牌 + 導航 + 語言切換
+     所有靜態文字用 data-i18n,語言切換時 common.js 會自動更新。
+     ─────────────────────────────────────────────── -->
+<header>
+  <div class="brand" data-i18n="brand_home">CODM // SURVIVAL // FEEDBACK</div>
+  <nav>
+    <a href="index.html" data-i18n="nav_home">Home</a>
+    <a href="admin.html" data-i18n="nav_admin">Admin</a>
+    <button id="lang-toggle" data-i18n="lang_toggle">中文</button>
+  </nav>
+</header>
+
+<!-- 主容器:所有動態內容都由 JS 塞進 #main -->
+<main id="main"></main>
+
+
+<!-- ───────────────────────────────────────────────
+     載入順序很重要:
+       1. supabase CDN — 提供 window.supabase.createClient
+       2. config.js    — 提供 SUPABASE_URL / KEY
+       3. common.js    — 建立 sb client 與 i18n
+       4. 頁面腳本      — 依 URL 參數渲染
+     ─────────────────────────────────────────────── -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="common.js"></script>
+
+<script>
+// ================================================================
+//  index.html 頁面腳本
+// ----------------------------------------------------------------
+//  這個檔案處理三種「頁面模式」,全部用 URL 參數決定,不用路由庫:
+//    - ?tab=bugs / ?tab=suggestions        → 列表(預設 bugs)
+//    - ?view=detail&type=bug|suggestion&id=N → 詳情
+//    - ?view=submit&type=bug|suggestion    → 提交表單
+//
+//  設計理由:
+//    - 純 URL 參數 → 可分享連結、可上一頁、無 modal 狀態管理
+//    - 一個 render() 入口,依 params 分派 → 邏輯扁平好讀
+// ================================================================
+
+
+// ─── 主渲染入口 ───────────────────────────────
+// 讀 URL 參數決定要渲染哪個 view。
+// 語言切換後 common.js 會呼叫 window.rerender,所以把 render 掛上去。
+async function render() {
+  applyI18n();                                // 先把 header 等靜態文字翻好
+  const params = new URLSearchParams(location.search);
+  const view = params.get('view') || 'list';
+  const type = params.get('type');
+  const id   = params.get('id');
+  const tab  = params.get('tab') || 'bugs';   // 列表預設看 bugs
+
+  const main = document.getElementById('main');
+
+  if (view === 'detail' && type && id) {
+    return renderDetail(main, type, id);
+  }
+  if (view === 'submit' && type) {
+    return renderSubmit(main, type);
+  }
+  return renderList(main, tab);
+}
+// 把入口暴露給 common.js 的語言切換用
+window.rerender = render;
+
+
+// ═══════════════════════════════════════════════
+//  [列表模式] renderList
+// ───────────────────────────────────────────────
+//  顯示 tabs、新增按鈕、卡片列表。
+//  資料來源:approved=true 的 bugs 或 suggestions。
+//  因為 RLS 政策擋在 DB 層,anon 就算沒加 .eq('approved', true)
+//  也只能看到已審核 —— 但這裡還是加上作為文件化意圖。
+// ═══════════════════════════════════════════════
+async function renderList(main, tab) {
+  const isBugs = tab === 'bugs';
+  const table  = isBugs ? 'bugs' : 'suggestions';
+  const otherTabHref = isBugs ? '?tab=suggestions' : '?tab=bugs';
+
+  // 骨架先出來,資料再填 —— 避免看到「白畫面 → 突然全出現」
+  main.innerHTML = `
+    <div class="tabs">
+      <a href="?tab=bugs"        class="${isBugs ? 'active' : ''}">${t('tab_bugs')}</a>
+      <a href="?tab=suggestions" class="${isBugs ? '' : 'active'}">${t('tab_suggestions')}</a>
+    </div>
+    <div class="actions">
+      <a href="?view=submit&type=${isBugs ? 'bug' : 'suggestion'}" class="btn">
+        ${isBugs ? t('new_bug') : t('new_suggestion')}
+      </a>
+    </div>
+    <div id="list" class="list"><div class="empty">${t('loading')}</div></div>
+  `;
+
+  // 抓資料:RLS 已經濾掉未審核,這裡再過一次是防禦性寫法。
+  // order by created_at desc — 最新的在最上面。
+  const { data, error } = await sb
+    .from(table)
+    .select('*')
+    .eq('approved', true)
+    .order('created_at', { ascending: false });
+
+  const listEl = document.getElementById('list');
+
+  if (error) {
+    listEl.innerHTML = `<div class="empty">${t('err_prefix')}${esc(error.message)}</div>`;
+    return;
+  }
+  if (!data || data.length === 0) {
+    listEl.innerHTML = `<div class="empty">${t('empty')}</div>`;
+    return;
+  }
+
+  // 每筆生一張卡:bugs 用 renderBugCard,suggestions 用 renderSuggestionCard。
+  // 拆兩個 fn 而不是塞一個 if 是為了讓每個渲染邏輯獨立、好維護。
+  listEl.innerHTML = data.map(r => isBugs ? renderBugCard(r) : renderSuggestionCard(r)).join('');
+
+  // suggestions 卡上會有投票鈕,綁事件
+  attachVoteHandlers(listEl);
+}
+
+
+// ─── Bug 卡片:標題 + 日期(user 要求主頁只顯示這兩項) ───
+function renderBugCard(r) {
+  return `
+    <article class="card">
+      <a class="card-body" href="?view=detail&type=bug&id=${r.id}">
+        <span class="tag tag-bug">${t('tag_bug')}</span>
+        <h3 class="card-title">${esc(r.title)}</h3>
+        <div class="card-meta">
+          <span class="mono">#${r.id}</span>
+          <span class="mono">${fmtDate(r.created_at)}</span>
+        </div>
+      </a>
+    </article>
+  `;
+}
+
+
+// ─── 建議卡片:標題 + 日期 + 投票列 ─────────────
+// 投票列跟卡片本體分開,才不會點投票鈕時被父層 <a> 連帶點成詳情連結。
+function renderSuggestionCard(r) {
+  const voted = hasVoted(r.id);
+  return `
+    <article class="card">
+      <a class="card-body" href="?view=detail&type=suggestion&id=${r.id}">
+        <h3 class="card-title">${esc(r.title)}</h3>
+        <div class="card-meta">
+          <span class="mono">#${r.id}</span>
+          <span class="mono">${fmtDate(r.created_at)}</span>
+        </div>
+      </a>
+      ${renderVotes(r, voted)}
+    </article>
+  `;
+}
+
+
+// ─── 投票列 HTML ──────────────────────────
+// voted 為真時兩顆鈕都 disabled;數字用等寬字體對齊。
+function renderVotes(r, voted) {
+  const dis = voted ? 'disabled' : '';
+  return `
+    <div class="votes">
+      <button data-vote="up"   data-id="${r.id}" ${dis}>
+        <span class="vote-label">▲ ${t('upvote')}</span>
+        <span class="mono" data-count>${r.upvotes}</span>
+      </button>
+      <button data-vote="down" data-id="${r.id}" ${dis}>
+        <span class="vote-label">▼ ${t('downvote')}</span>
+        <span class="mono" data-count>${r.downvotes}</span>
+      </button>
+    </div>
+  `;
+}
+
+
+// ═══════════════════════════════════════════════
+//  [詳情模式] renderDetail
+// ───────────────────────────────────────────────
+//  用 URL id 抓單筆,顯示標題、日期、說明、媒體。
+//  suggestion 的詳情底部再放一次投票列(user 要求)。
+//  找不到 / 未審核的 id → 顯示錯誤而不是白畫面。
+// ═══════════════════════════════════════════════
+async function renderDetail(main, type, id) {
+  const table = type === 'bug' ? 'bugs' : 'suggestions';
+  const backHref = `?tab=${type === 'bug' ? 'bugs' : 'suggestions'}`;
+
+  // 骨架
+  main.innerHTML = `
+    <a href="${backHref}" class="back">${t('back')}</a>
+    <div class="empty">${t('loading')}</div>
+  `;
+
+  // 抓資料:限定 approved=true,防止有人猜 id 看到未審核內容。
+  // maybeSingle() 找不到會回 null 而不會拋錯,好處理。
+  const { data, error } = await sb
+    .from(table)
+    .select('*')
+    .eq('id', id)
+    .eq('approved', true)
+    .maybeSingle();
+
+  if (error || !data) {
+    main.innerHTML = `
+      <a href="${backHref}" class="back">${t('back')}</a>
+      <div class="empty">${t('err_prefix')}${esc(error ? error.message : 'not found')}</div>
+    `;
+    return;
+  }
+
+  const tag   = type === 'bug' ? `<span class="tag tag-bug">${t('tag_bug')}</span>` : '';
+  const media = data.media_url ? renderMedia(data.media_url) : '';
+  const votes = type === 'suggestion' ? renderVotes(data, hasVoted(data.id)) : '';
+
+  main.innerHTML = `
+    <a href="${backHref}" class="back">${t('back')}</a>
+    <article class="detail">
+      ${tag}
+      <h1 class="detail-title">${esc(data.title)}</h1>
+      <div class="detail-meta">
+        <span class="mono">#${data.id}</span>
+        <span class="mono">${fmtDate(data.created_at)}</span>
+      </div>
+      ${media}
+      <div class="detail-body">${esc(data.description)}</div>
+      ${votes}
+    </article>
+  `;
+
+  // 詳情底部的投票鈕也要綁事件
+  attachVoteHandlers(main);
+}
+
+
+// ═══════════════════════════════════════════════
+//  [提交模式] renderSubmit
+// ───────────────────────────────────────────────
+//  訪客新增 bug 或 suggestion 的表單。
+//  流程:
+//    1. 前端限制檔案(大小 25MB / 型別 image|video)
+//    2. 有選檔案 → 上傳到 storage.media,取公開 URL
+//    3. INSERT 到 bugs / suggestions(不帶 approved,靠 default false)
+//    4. 顯示「待審核」提示;不 redirect,讓使用者感覺送出這件事完成了
+//
+//  資料庫端保險:
+//    - anon INSERT 政策 with check (approved = false) 擋掉夾帶 approved=true
+//    - suggestions 額外擋 upvotes/downvotes 非 0
+// ═══════════════════════════════════════════════
+function renderSubmit(main, type) {
+  const isBug = type === 'bug';
+  const backHref = `?tab=${isBug ? 'bugs' : 'suggestions'}`;
+
+  main.innerHTML = `
+    <a href="${backHref}" class="back">${t('back')}</a>
+    <form id="submit-form" class="form">
+      <h2>${isBug ? t('form_new_bug') : t('form_new_suggestion')}</h2>
+
+      <label>${t('f_title')}
+        <input type="text" name="title" required maxlength="200">
+      </label>
+
+      <label>${t('f_desc')}
+        <textarea name="description" required rows="6" maxlength="4000"></textarea>
+      </label>
+
+      <label>${t('f_media')}
+        <input type="file" name="media" accept="image/*,video/*">
+      </label>
+
+      <button type="submit" class="btn">${t('submit')}</button>
+      <div class="status" id="submit-status"></div>
+    </form>
+  `;
+
+  document.getElementById('submit-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const form   = ev.currentTarget;
+    const status = form.querySelector('#submit-status');
+    const btn    = form.querySelector('button[type=submit]');
+
+    // 讀值,防前後空白
+    const title       = form.title.value.trim();
+    const description = form.description.value.trim();
+    const file        = form.media.files[0];
+
+    // UI 鎖住,防重複送出
+    btn.disabled = true;
+    status.className = 'status';
+    status.textContent = '';
+
+    // ── 上傳媒體(若有選檔案) ─────────────────
+    let media_url = null;
+    if (file) {
+      // 大小 / 型別檢查:前端擋掉明顯錯誤,不必先打伺服器再被拒。
+      // 25 * 1024 * 1024 = 25 MB(以 binary 為單位,跟後台 bucket limit 對齊)
+      if (file.size > 25 * 1024 * 1024) {
+        status.className = 'status err';
+        status.textContent = t('err_size');
+        btn.disabled = false;
+        return;
+      }
+      if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+        status.className = 'status err';
+        status.textContent = t('err_type');
+        btn.disabled = false;
+        return;
+      }
+
+      status.textContent = t('uploading');
+
+      // 檔名:時間戳 + 隨機 + 清理過的原檔名。時間戳讓上傳順序好排,
+      // 隨機碼避免同秒撞名,清理是移除斜線/中文空白等 storage 不喜歡的字元。
+      const safeName = file.name.replace(/[^\w.\-]/g, '_');
+      const path = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeName}`;
+
+      const up = await sb.storage
+        .from('media')
+        .upload(path, file, { contentType: file.type, cacheControl: '3600' });
+
+      if (up.error) {
+        status.className = 'status err';
+        status.textContent = t('err_prefix') + up.error.message;
+        btn.disabled = false;
+        return;
+      }
+
+      // Public bucket 才拿得到 getPublicUrl;若你把 bucket 設 private 這裡要改。
+      const { data: pub } = sb.storage.from('media').getPublicUrl(path);
+      media_url = pub.publicUrl;
+    }
+
+    // ── 寫進資料表 ───────────────────────────
+    status.textContent = t('submitting');
+    const table = isBug ? 'bugs' : 'suggestions';
+    const { error } = await sb.from(table).insert({ title, description, media_url });
+
+    if (error) {
+      status.className = 'status err';
+      status.textContent = t('err_prefix') + error.message;
+      btn.disabled = false;
+      return;
+    }
+
+    // ── 送出成功:顯示待審核訊息、清表單、留在原頁 ──
+    status.className = 'status ok';
+    status.textContent = t('submitted');
+    form.reset();
+    // 不解鎖 btn:避免重複送同一筆。要再送一筆,使用者手動重整或返回。
+  });
+}
+
+
+// ═══════════════════════════════════════════════
+//  投票邏輯
+// ───────────────────────────────────────────────
+//  設計要點(user 明確要求):
+//    - 用 localStorage 標記投過的 id(voted_123 = '1')
+//    - 投一次後兩顆鈕鎖定,重整仍鎖 → 讀 localStorage 決定 disabled
+//    - 不做 IP 防護,localStorage 就好(不強制)
+//    - 呼叫 vote_suggestion RPC(SECURITY DEFINER,能繞 RLS 更新 upvotes)
+// ═══════════════════════════════════════════════
+
+// 檢查這台裝置是否投過某筆
+function hasVoted(id) {
+  return localStorage.getItem('voted_' + id) === '1';
+}
+
+// 標記投過
+function markVoted(id) {
+  localStorage.setItem('voted_' + id, '1');
+}
+
+// 把某容器裡所有 data-vote 鈕綁上點擊處理
+// 用事件委派更省,但這裡鈕不多,直接綁清楚。
+function attachVoteHandlers(container) {
+  container.querySelectorAll('[data-vote]').forEach(btn => {
+    btn.addEventListener('click', onVote);
+  });
+}
+
+async function onVote(ev) {
+  const btn = ev.currentTarget;
+  const id  = btn.dataset.id;
+  const dir = btn.dataset.vote;              // 'up' 或 'down'
+
+  // 重覆保護:即使 UI 沒 disable,localStorage 也擋
+  if (hasVoted(id)) return;
+
+  // 先鎖 UI,避免快速連點
+  const siblings = btn.parentElement.querySelectorAll('button');
+  siblings.forEach(b => b.disabled = true);
+
+  // 呼叫 RPC:vote_suggestion(sid, dir)
+  const { error } = await sb.rpc('vote_suggestion', {
+    sid: Number(id),
+    dir: dir
+  });
+
+  if (error) {
+    // 失敗解鎖,讓使用者重試
+    siblings.forEach(b => b.disabled = false);
+    alert(error.message);
+    return;
+  }
+
+  // 成功:標記 + 本地票數 +1(避免再打一次 SELECT 拿最新值)
+  markVoted(id);
+  const countEl = btn.querySelector('[data-count]');
+  if (countEl) countEl.textContent = String(Number(countEl.textContent) + 1);
+}
+
+
+// ─── 啟動 ─────────────────────────────────
+// 進頁面時執行一次;之後語言切換透過 window.rerender 再叫一次。
+render();
+</script>
+
+</body>
+</html>
