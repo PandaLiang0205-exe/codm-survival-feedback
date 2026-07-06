@@ -16,7 +16,8 @@
 // ================================================================
 
 // 專案網址(結尾不要斜線)
-window.SUPABASE_URL = 'https://YOUR-PROJECT-REF.supabase.co';
+window.SUPABASE_URL = 'https://smjzjfwuiwskdaiugxur.supabase.co';
 
-// 公開的 anon key(一長串 JWT，開頭通常是 eyJ...)
-window.SUPABASE_ANON_KEY = 'YOUR-ANON-KEY';
+// 公開的 publishable key (Supabase 新版 API key 格式,取代舊的 anon JWT)
+// 舊格式 eyJ... 也能用,兩者都是「僅公開讀寫,受 RLS 保護」的 key
+window.SUPABASE_ANON_KEY = 'sb_publishable_gu9ZryTqVe7UEge-GhcNqw_5presIHt';
