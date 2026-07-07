@@ -71,8 +71,8 @@ window.__sdkReady
 // 為什麼不用 i18n 套件?因為只有兩種語言、幾十個 key,自幹最省。
 const I18N = {
   // 頁首
-  brand_home:      { en: 'CODM // SURVIVAL // FEEDBACK', zh: 'CODM // 生存模式 // 意見板' },
-  brand_admin:     { en: 'CODM // ADMIN',                zh: 'CODM // 管理後台' },
+  brand_home:      { en: '【生存模式回饋系統】',          zh: '【生存模式回饋系統】' },
+  brand_admin:     { en: '【生存模式回饋系統】管理後台',   zh: '【生存模式回饋系統】管理後台' },
   nav_home:        { en: 'Home',                          zh: '主頁' },
   nav_admin:       { en: 'Admin',                         zh: '管理' },
   lang_toggle:     { en: '中文',                          zh: 'EN' },
