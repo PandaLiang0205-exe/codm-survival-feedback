@@ -597,11 +597,17 @@ function renderSubmit(main, type) {
       return;
     }
 
-    // ── 送出成功:顯示待審核訊息、清表單、留在原頁 ──
+    // ── 送出成功:顯示待審核訊息、清表單、解鎖按鈕留在原頁 ──
+    // 之前這裡刻意不解鎖 btn(怕重複送同一筆),但那顧慮不成立:
+    //   1. 送出開頭已 btn.disabled = true,async 期間再點沒用 → 這才是真正防雙擊
+    //   2. form.reset() 已把 title/description 清空 → 直接再按會被 required 擋掉
+    // 所以解鎖是安全的,使用者可以連續送多筆而不必手動回列表再點「+新增」。
     status.className = 'status ok';
     status.textContent = t('submitted');
     form.reset();
-    // 不解鎖 btn:避免重複送同一筆。要再送一筆,使用者手動重整或返回。
+    btn.disabled = false;
+    // 游標放回標題欄,方便直接輸入下一筆(不強迫捲頁,避免打斷視覺)
+    form.title.focus();
   });
 }
 
