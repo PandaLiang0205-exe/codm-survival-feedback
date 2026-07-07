@@ -62,11 +62,17 @@
 // 語言切換後 common.js 會呼叫 window.rerender,所以把 render 掛上去。
 async function render() {
   applyI18n();                                // 先把 header 等靜態文字翻好
+
+  // 每個 session 只 +1 visits 一次,避免使用者狂切 tab 灌爆計數。
+  // 用 sessionStorage(不是 localStorage) → 關掉分頁就重置,對「訪問人次」定義較合理。
+  maybeIncrementVisits();
+
   const params = new URLSearchParams(location.search);
   const view = params.get('view') || 'list';
   const type = params.get('type');
   const id   = params.get('id');
   const tab  = params.get('tab') || 'bugs';   // 列表預設看 bugs
+  const status = params.get('status') || 'open';  // bugs 專用:open / resolved
 
   const main = document.getElementById('main');
 
@@ -76,7 +82,17 @@ async function render() {
   if (view === 'submit' && type) {
     return renderSubmit(main, type);
   }
-  return renderList(main, tab);
+  return renderList(main, tab, status);
+}
+
+
+// ─── 訪問計數 (fire-and-forget) ───────────────
+// 呼叫 increment_visits RPC,不 await 也不管失敗 → 統計是「錦上添花」,
+// 網路壞掉不該擋住頁面渲染。
+function maybeIncrementVisits() {
+  if (sessionStorage.getItem('visited') === '1') return;
+  sessionStorage.setItem('visited', '1');
+  sb.rpc('increment_visits').catch(() => { /* 忽略 */ });
 }
 // 把入口暴露給 common.js 的語言切換用
 window.rerender = render;
@@ -95,9 +111,11 @@ window.rerender = render;
 //    - 搜尋 / 排序都在前端做,避免每個按鍵都打 DB
 //    - 這樣做的前提是資料量不會爆(遊戲意見板規模上是合理的)
 // ═══════════════════════════════════════════════
-async function renderList(main, tab) {
+async function renderList(main, tab, status) {
   const isBugs = tab === 'bugs';
   const table  = isBugs ? 'bugs' : 'suggestions';
+  // status 只在 bugs 分頁生效:'open' = 未解決 / 'resolved' = 已解決
+  const showResolved = isBugs && status === 'resolved';
 
   // 骨架先出來,資料再填 —— 避免看到「白畫面 → 突然全出現」
   // 搜尋列 + 排序控制項:給 bugs 也給 suggestions;
@@ -113,11 +131,25 @@ async function renderList(main, tab) {
         <option value="top">${t('sort_top')}</option>
       `;
 
+  // BUG 分頁專屬的「未解決 / 已解決」切換條
+  const statusBar = isBugs ? `
+    <div class="status-bar">
+      <a href="?tab=bugs&status=open"     class="pill ${showResolved ? '' : 'active'}">${t('filter_open')}</a>
+      <a href="?tab=bugs&status=resolved" class="pill ${showResolved ? 'active' : ''}">${t('filter_resolved')}</a>
+    </div>
+  ` : '';
+
   main.innerHTML = `
+    <div id="site-stats" class="site-stats">
+      <span class="stat"><span class="stat-label">${t('stats_bugs')}</span> <b class="stat-val mono" data-stat="bugs">–</b></span>
+      <span class="stat"><span class="stat-label">${t('stats_suggestions')}</span> <b class="stat-val mono" data-stat="suggestions">–</b></span>
+      <span class="stat"><span class="stat-label">${t('stats_views')}</span> <b class="stat-val mono" data-stat="visits">–</b></span>
+    </div>
     <div class="tabs">
       <a href="?tab=bugs"        class="${isBugs ? 'active' : ''}">${t('tab_bugs')}</a>
       <a href="?tab=suggestions" class="${isBugs ? '' : 'active'}">${t('tab_suggestions')}</a>
     </div>
+    ${statusBar}
     <div class="actions">
       <a href="?view=submit&type=${isBugs ? 'bug' : 'suggestion'}" class="btn">
         ${isBugs ? t('new_bug') : t('new_suggestion')}
@@ -133,13 +165,16 @@ async function renderList(main, tab) {
     <div id="list" class="list"><div class="empty">${t('loading')}</div></div>
   `;
 
+  // stats 三個獨立 query,不擋主列表渲染 → fire-and-forget
+  loadSiteStats();
+
   // 抓資料:RLS 已經濾掉未審核,這裡再過一次是防禦性寫法。
   // 排序在前端做,DB 這裡只固定用 created_at desc 拿全部,少一次 orderBy。
-  const { data, error } = await sb
-    .from(table)
-    .select('*')
-    .eq('approved', true)
-    .order('created_at', { ascending: false });
+  // BUG 分頁按 status 再過一次 resolved 欄位。
+  let query = sb.from(table).select('*').eq('approved', true);
+  if (isBugs) query = query.eq('resolved', showResolved);
+  query = query.order('created_at', { ascending: false });
+  const { data, error } = await query;
 
   const listEl = document.getElementById('list');
 
@@ -167,6 +202,28 @@ async function renderList(main, tab) {
   });
 
   renderFilteredList();
+}
+
+
+// ─── 抓 stats 並填進右上角 stats bar ─────────
+// 三個 query 平行:
+//   bugs count / suggestions count → head request 只拿 count,不拉 row
+//   visits → 從 site_stats 讀
+// 任何一項失敗就顯示 –(dash),不擋整頁。
+async function loadSiteStats() {
+  const [bugsRes, sugsRes, statsRes] = await Promise.all([
+    sb.from('bugs').select('*', { count: 'exact', head: true }).eq('approved', true),
+    sb.from('suggestions').select('*', { count: 'exact', head: true }).eq('approved', true),
+    sb.from('site_stats').select('visits').eq('id', 1).maybeSingle(),
+  ]);
+
+  const setStat = (name, val) => {
+    const el = document.querySelector(`[data-stat="${name}"]`);
+    if (el) el.textContent = (val == null) ? '–' : Number(val).toLocaleString();
+  };
+  setStat('bugs',        bugsRes.error ? null : bugsRes.count);
+  setStat('suggestions', sugsRes.error ? null : sugsRes.count);
+  setStat('visits',      statsRes.error || !statsRes.data ? null : statsRes.data.visits);
 }
 
 
@@ -210,11 +267,16 @@ function renderFilteredList() {
 
 
 // ─── Bug 卡片:標題 + 日期(user 要求主頁只顯示這兩項) ───
+// 已解決的用 tag-resolved 綠標 + card-resolved 降不透明度,一眼區分。
 function renderBugCard(r) {
+  const tag = r.resolved
+    ? `<span class="tag tag-resolved">${t('tag_resolved')}</span>`
+    : `<span class="tag tag-bug">${t('tag_bug')}</span>`;
+  const cls = r.resolved ? 'card card-resolved' : 'card';
   return `
-    <article class="card">
+    <article class="${cls}">
       <a class="card-body" href="?view=detail&type=bug&id=${r.id}">
-        <span class="tag tag-bug">${t('tag_bug')}</span>
+        ${tag}
         <h3 class="card-title">${esc(r.title)}</h3>
         <div class="card-meta">
           <span class="mono">#${r.id}</span>
@@ -301,7 +363,13 @@ async function renderDetail(main, type, id) {
     return;
   }
 
-  const tag   = type === 'bug' ? `<span class="tag tag-bug">${t('tag_bug')}</span>` : '';
+  // bug 詳情:若已解決顯示綠色 RESOLVED tag,否則顯示紅色 BUG tag
+  let tag = '';
+  if (type === 'bug') {
+    tag = data.resolved
+      ? `<span class="tag tag-resolved">${t('tag_resolved')}</span>`
+      : `<span class="tag tag-bug">${t('tag_bug')}</span>`;
+  }
   const media = data.media_url ? renderMedia(data.media_url) : '';
   const votes = type === 'suggestion' ? renderVotes(data) : '';
 

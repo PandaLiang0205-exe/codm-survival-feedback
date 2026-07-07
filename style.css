@@ -115,6 +115,39 @@ main {
 }
 
 
+/* ─── 站點統計條(右上角) ──────────────────────
+   BUG / 建議數量 + 全站瀏覽次數。
+   靠右對齊,idle 為 muted 色,只有數字用 accent 色強調 → HUD 儀表感。
+   ────────────────────────────────────────────── */
+.site-stats {
+  display: flex;
+  gap: 18px;
+  justify-content: flex-end;
+  align-items: baseline;
+  margin: -8px 0 14px;
+  font-family: var(--font-cond);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 12px;
+  color: var(--muted);
+}
+.site-stats .stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.site-stats .stat-label { opacity: 0.85; }
+.site-stats .stat-val {
+  color: var(--accent);
+  font-weight: 500;
+  font-size: 13px;
+}
+@media (max-width: 520px) {
+  .site-stats { gap: 12px; font-size: 11px; }
+  .site-stats .stat-val { font-size: 12px; }
+}
+
+
 /* ─── Tabs(Bug / 建議) ────────────────────── */
 .tabs {
   display: flex;
@@ -262,7 +295,40 @@ main {
   margin-bottom: 8px;
   vertical-align: middle;
 }
-.tag-bug { background: var(--bug); color: #fff; }
+.tag-bug      { background: var(--bug); color: #fff; }
+.tag-resolved { background: var(--ok);  color: #000; }
+
+
+/* ─── 已解決卡片:視覺降權(idle 半透明,hover 才回來) ─── */
+.card-resolved            { opacity: 0.65; }
+.card-resolved:hover      { opacity: 1; }
+.card-resolved .card-title { text-decoration: line-through; text-decoration-color: var(--muted); }
+
+
+/* ─── 未解決 / 已解決 切換 pill ──────────────
+   小型膠囊按鈕列,不搶 tabs 的注意力但明顯可點。 */
+.status-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+  margin-top: -8px;
+}
+.status-bar .pill {
+  padding: 5px 14px;
+  border: 1px solid var(--border);
+  font-family: var(--font-cond);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 12px;
+  color: var(--muted);
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.status-bar .pill:hover { color: var(--text); border-color: var(--border-2); }
+.status-bar .pill.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #000;
+}
 
 
 /* ─── 投票列 ───────────────────────────── */
@@ -501,14 +567,27 @@ main {
 
 /* Edit / Save = 資訊/建構語意 → 用強調色(amber);Cancel = 中性 */
 .admin-actions button[data-action=edit],
-.admin-actions button[data-action=save] {
+.admin-actions button[data-action=save],
+.admin-actions button[data-action=reopen] {
   border-color: var(--accent);
   color: var(--accent);
 }
 .admin-actions button[data-action=edit]:hover:not(:disabled),
-.admin-actions button[data-action=save]:hover:not(:disabled) {
+.admin-actions button[data-action=save]:hover:not(:disabled),
+.admin-actions button[data-action=reopen]:hover:not(:disabled) {
   background: var(--accent);
   border-color: var(--accent);
+  color: #000;
+}
+
+/* Resolve = 標記已解決 → 綠(正向語意,跟 approve 同色系) */
+.admin-actions button[data-action=resolve] {
+  border-color: rgba(109, 191, 70, 0.55);
+  color: var(--ok);
+}
+.admin-actions button[data-action=resolve]:hover:not(:disabled) {
+  background: var(--ok);
+  border-color: var(--ok);
   color: #000;
 }
 .admin-actions button:disabled { opacity: 0.4; cursor: not-allowed; }

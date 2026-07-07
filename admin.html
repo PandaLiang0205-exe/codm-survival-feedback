@@ -228,13 +228,26 @@ function renderTabsBar(isPending) {
 
 // ─── 單張管理卡:標題、日期、說明、媒體、動作列 ─────
 // pending  模式 → Approve / Reject
-// approved 模式 → Edit    / Delete
+// approved 模式 → Edit    / Delete + (bug) 標記已解決 / 取消解決
 function renderAdminCard(r, isPending) {
   const isBug = r.__type === 'bugs';
-  const tag   = isBug ? `<span class="tag tag-bug">${t('tag_bug')}</span>` : '';
+  // bug 顯示 BUG 或 RESOLVED 標籤(已核准且 resolved=true 時顯示 RESOLVED)
+  let tag = '';
+  if (isBug) {
+    tag = r.resolved
+      ? `<span class="tag tag-resolved">${t('tag_resolved')}</span>`
+      : `<span class="tag tag-bug">${t('tag_bug')}</span>`;
+  }
   const media = r.media_url ? renderMedia(r.media_url) : '';
   const voteInfo = !isBug
     ? `<span class="mono" style="color:var(--muted)">▲${r.upvotes} ▼${r.downvotes}</span>`
+    : '';
+
+  // 已核准的 bug 額外提供「標記為已解決 / 取消解決」按鈕
+  const resolveBtn = (!isPending && isBug)
+    ? (r.resolved
+        ? `<button data-action="reopen" data-table="${r.__type}" data-id="${r.id}">${t('mark_open')}</button>`
+        : `<button data-action="resolve" data-table="${r.__type}" data-id="${r.id}">${t('mark_resolved')}</button>`)
     : '';
 
   const actions = isPending
@@ -247,6 +260,7 @@ function renderAdminCard(r, isPending) {
       </button>
     `
     : `
+      ${resolveBtn}
       <button data-action="edit"   data-table="${r.__type}" data-id="${r.id}">
         ${t('edit')}
       </button>
@@ -277,13 +291,16 @@ function renderAdminCard(r, isPending) {
 }
 
 
-// ─── 動作處理:approve / reject / edit / delete ─────────
+// ─── 動作處理:approve / reject / edit / delete / resolve / reopen ─────────
 async function onAction(ev) {
   const btn = ev.currentTarget;
   const { action, table, id } = btn.dataset;
 
-  if (action === 'edit')   return startEdit(btn, table, id);
-  if (action === 'delete') return doDelete(btn, table, id);
+  if (action === 'edit')     return startEdit(btn, table, id);
+  if (action === 'delete')   return doDelete(btn, table, id);
+  if (action === 'resolve' || action === 'reopen') {
+    return toggleResolved(btn, table, id, action === 'resolve');
+  }
 
   // approve / reject:先鎖鈕再送 DB
   const card = btn.closest('article');
@@ -307,6 +324,27 @@ async function onAction(ev) {
     // 佇列空了 → 重繪一次讓 no-pending 訊息出來
     render();
   }
+}
+
+
+// ─── 標記已解決 / 取消解決 ──────────────────────
+// UPDATE bugs.resolved = true / false;成功後直接重繪,讓卡上 tag 與
+// 按鈕文字同步(懶得就地 patch DOM,直接重新拉一次資料簡單可靠)。
+async function toggleResolved(btn, table, id, toResolved) {
+  const card = btn.closest('article');
+  card.querySelectorAll('button').forEach(b => b.disabled = true);
+
+  const { error } = await sb.from(table)
+    .update({ resolved: toResolved })
+    .eq('id', Number(id));
+
+  if (error) {
+    card.querySelectorAll('button').forEach(b => b.disabled = false);
+    alert(error.message);
+    return;
+  }
+
+  render();
 }
 
 

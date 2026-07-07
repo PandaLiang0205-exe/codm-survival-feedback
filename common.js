@@ -51,6 +51,18 @@ const I18N = {
   sort_top:           { en: 'Most supported',             zh: '支持度最高' },
   no_match:           { en: 'No results match.',          zh: '找不到符合的項目。' },
 
+  // 站點統計
+  stats_bugs:         { en: 'BUGS',                       zh: 'BUG' },
+  stats_suggestions:  { en: 'SUGG',                       zh: '建議' },
+  stats_views:        { en: 'VIEWS',                      zh: '瀏覽' },
+
+  // BUG 狀態
+  filter_open:        { en: 'Unresolved',                 zh: '未解決' },
+  filter_resolved:    { en: 'Resolved',                   zh: '已解決' },
+  tag_resolved:       { en: 'RESOLVED',                   zh: '已解決' },
+  mark_resolved:      { en: 'Mark Resolved',              zh: '標記為已解決' },
+  mark_open:          { en: 'Reopen',                     zh: '取消解決' },
+
   // 表單
   form_new_bug:        { en: 'New Bug Report',            zh: '新增 Bug 回報' },
   form_new_suggestion: { en: 'New Suggestion',            zh: '新增建議' },
