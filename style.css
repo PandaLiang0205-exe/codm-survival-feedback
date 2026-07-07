@@ -142,6 +142,55 @@ main {
 .actions { margin-bottom: 20px; }
 
 
+/* ─── 工具列(搜尋 + 排序) ────────────────── */
+/* 為什麼跟 .actions 分開?—— 「新增」是主要 CTA,獨佔一行更醒目;
+   工具列是輔助操作,擺在下面剛好用來過濾即將展開的列表。 */
+.toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+#search-input {
+  flex: 1;
+  min-width: 180px;
+  background: #0a0a0a;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 11px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+#search-input:focus { border-color: var(--accent); }
+#search-input::placeholder { color: var(--muted); }
+
+.sort-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-cond);
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+#sort-select {
+  background: #0a0a0a;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+}
+#sort-select:focus { border-color: var(--accent); }
+
+
 /* ─── 主要按鈕(強調色外框) ────────────────── */
 .btn {
   background: transparent;
@@ -264,6 +313,18 @@ main {
 .votes button[data-vote="down"]:hover:not(:disabled) {
   border-color: var(--bug);
   color: var(--bug);
+}
+
+/* 已投的方向 → 用實心底色標示「這是你目前的選擇」;再點一次即取消 */
+.votes button[data-vote="up"].voted {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #000;
+}
+.votes button[data-vote="down"].voted {
+  background: var(--bug);
+  border-color: var(--bug);
+  color: #fff;
 }
 .vote-label {
   font-family: var(--font-cond);
@@ -426,16 +487,62 @@ main {
   border-color: var(--ok);
   color: #000;
 }
-.admin-actions button[data-action=reject] {
+.admin-actions button[data-action=reject],
+.admin-actions button[data-action=delete] {
   border-color: rgba(230, 57, 70, 0.55);
   color: var(--bug);
 }
-.admin-actions button[data-action=reject]:hover:not(:disabled) {
+.admin-actions button[data-action=reject]:hover:not(:disabled),
+.admin-actions button[data-action=delete]:hover:not(:disabled) {
   background: var(--bug);
   border-color: var(--bug);
   color: #fff;
 }
+
+/* Edit / Save = 資訊/建構語意 → 用強調色(amber);Cancel = 中性 */
+.admin-actions button[data-action=edit],
+.admin-actions button[data-action=save] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.admin-actions button[data-action=edit]:hover:not(:disabled),
+.admin-actions button[data-action=save]:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #000;
+}
 .admin-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+
+/* ─── Admin 就地編輯表單 ─────────────────────── */
+.edit-label {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+  font-family: var(--font-cond);
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+.edit-label input,
+.edit-label textarea {
+  background: #0a0a0a;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 9px 11px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.edit-label input:focus,
+.edit-label textarea:focus { border-color: var(--accent); }
+.edit-label textarea { resize: vertical; }
+.edit-status {
+  margin-top: 6px;
+  min-height: 16px;
+}
 
 
 /* ─── 空狀態文字 ────────────────────────── */

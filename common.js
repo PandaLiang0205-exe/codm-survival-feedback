@@ -37,11 +37,19 @@ const I18N = {
   logout:          { en: 'Logout',                        zh: '登出' },
 
   // Tab / 按鈕
-  tab_bugs:        { en: 'Bugs',                          zh: '錯誤回報' },
-  tab_suggestions: { en: 'Suggestions',                   zh: '建議' },
+  tab_bugs:        { en: 'Bug Reports',                   zh: 'BUG 回報' },
+  tab_suggestions: { en: 'Game Suggestions',              zh: '遊戲建議' },
   new_bug:         { en: '+ Report Bug',                  zh: '+ 新增回報' },
   new_suggestion:  { en: '+ Add Suggestion',              zh: '+ 新增建議' },
   back:            { en: '← Back',                        zh: '← 返回' },
+
+  // 搜尋 / 排序
+  search_placeholder: { en: 'Search keywords...',         zh: '搜尋關鍵字...' },
+  sort_label:         { en: 'Sort:',                      zh: '排序:' },
+  sort_newest:        { en: 'Newest first',               zh: '最新優先' },
+  sort_oldest:        { en: 'Oldest first',               zh: '最舊優先' },
+  sort_top:           { en: 'Most supported',             zh: '支持度最高' },
+  no_match:           { en: 'No results match.',          zh: '找不到符合的項目。' },
 
   // 表單
   form_new_bug:        { en: 'New Bug Report',            zh: '新增 Bug 回報' },
@@ -69,9 +77,19 @@ const I18N = {
   f_password:      { en: 'Password',                      zh: '密碼' },
   do_login:        { en: 'Sign In',                       zh: '登入' },
   pending_queue:   { en: 'Pending Queue',                 zh: '待審核佇列' },
+  approved_list:   { en: 'Approved Items',                zh: '已核准項目' },
   no_pending:      { en: '✓ No pending items.',           zh: '✓ 目前沒有待審核項目。' },
+  no_approved:     { en: '✓ No approved items.',          zh: '✓ 目前沒有已核准項目。' },
   approve:         { en: 'Approve',                       zh: '核准' },
   reject:          { en: 'Reject',                        zh: '拒絕' },
+  edit:            { en: 'Edit',                          zh: '編輯' },
+  del:             { en: 'Delete',                        zh: '刪除' },
+  save:            { en: 'Save',                          zh: '儲存' },
+  cancel:          { en: 'Cancel',                        zh: '取消' },
+  confirm_delete:  { en: 'Delete this item permanently?', zh: '確定要永久刪除這筆嗎?' },
+  saved:           { en: '✓ Saved.',                      zh: '✓ 已儲存。' },
+  admin_tab_pending:  { en: 'Pending',                    zh: '待審核' },
+  admin_tab_approved: { en: 'Approved',                   zh: '已核准' },
 
   // 錯誤
   err_prefix:      { en: 'Error: ',                       zh: '錯誤:' }

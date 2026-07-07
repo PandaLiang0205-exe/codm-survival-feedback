@@ -85,17 +85,34 @@ window.rerender = render;
 // ═══════════════════════════════════════════════
 //  [列表模式] renderList
 // ───────────────────────────────────────────────
-//  顯示 tabs、新增按鈕、卡片列表。
+//  顯示 tabs、新增按鈕、搜尋欄、排序、卡片列表。
 //  資料來源:approved=true 的 bugs 或 suggestions。
 //  因為 RLS 政策擋在 DB 層,anon 就算沒加 .eq('approved', true)
 //  也只能看到已審核 —— 但這裡還是加上作為文件化意圖。
+//
+//  搜尋 + 排序策略:
+//    - 一次把所有已核准資料抓下來存在 window._listCache
+//    - 搜尋 / 排序都在前端做,避免每個按鍵都打 DB
+//    - 這樣做的前提是資料量不會爆(遊戲意見板規模上是合理的)
 // ═══════════════════════════════════════════════
 async function renderList(main, tab) {
   const isBugs = tab === 'bugs';
   const table  = isBugs ? 'bugs' : 'suggestions';
-  const otherTabHref = isBugs ? '?tab=suggestions' : '?tab=bugs';
 
   // 骨架先出來,資料再填 —— 避免看到「白畫面 → 突然全出現」
+  // 搜尋列 + 排序控制項:給 bugs 也給 suggestions;
+  // 但 bugs 沒有支持度概念,所以「支持度最高」排序只給 suggestions。
+  const sortOptions = isBugs
+    ? `
+        <option value="newest">${t('sort_newest')}</option>
+        <option value="oldest">${t('sort_oldest')}</option>
+      `
+    : `
+        <option value="newest">${t('sort_newest')}</option>
+        <option value="oldest">${t('sort_oldest')}</option>
+        <option value="top">${t('sort_top')}</option>
+      `;
+
   main.innerHTML = `
     <div class="tabs">
       <a href="?tab=bugs"        class="${isBugs ? 'active' : ''}">${t('tab_bugs')}</a>
@@ -106,11 +123,18 @@ async function renderList(main, tab) {
         ${isBugs ? t('new_bug') : t('new_suggestion')}
       </a>
     </div>
+    <div class="toolbar">
+      <input id="search-input" type="text" placeholder="${t('search_placeholder')}" autocomplete="off">
+      <label class="sort-label">
+        <span>${t('sort_label')}</span>
+        <select id="sort-select">${sortOptions}</select>
+      </label>
+    </div>
     <div id="list" class="list"><div class="empty">${t('loading')}</div></div>
   `;
 
   // 抓資料:RLS 已經濾掉未審核,這裡再過一次是防禦性寫法。
-  // order by created_at desc — 最新的在最上面。
+  // 排序在前端做,DB 這裡只固定用 created_at desc 拿全部,少一次 orderBy。
   const { data, error } = await sb
     .from(table)
     .select('*')
@@ -123,16 +147,64 @@ async function renderList(main, tab) {
     listEl.innerHTML = `<div class="empty">${t('err_prefix')}${esc(error.message)}</div>`;
     return;
   }
-  if (!data || data.length === 0) {
-    listEl.innerHTML = `<div class="empty">${t('empty')}</div>`;
+
+  // 把資料 + 狀態存在 window,搜尋/排序改變時直接重繪不重打 DB
+  window._listCache = {
+    isBugs,
+    data: data || [],
+    keyword: '',
+    sort: 'newest'
+  };
+
+  // 綁事件:input 邊打邊搜尋、select 換排序即重繪
+  document.getElementById('search-input').addEventListener('input', (ev) => {
+    window._listCache.keyword = ev.target.value.trim().toLowerCase();
+    renderFilteredList();
+  });
+  document.getElementById('sort-select').addEventListener('change', (ev) => {
+    window._listCache.sort = ev.target.value;
+    renderFilteredList();
+  });
+
+  renderFilteredList();
+}
+
+
+// ─── 依 keyword / sort 過濾並重繪列表 ─────────
+// 從 window._listCache 讀狀態,不重打 DB。
+function renderFilteredList() {
+  const cache = window._listCache;
+  if (!cache) return;
+  const { isBugs, data, keyword, sort } = cache;
+  const listEl = document.getElementById('list');
+  if (!listEl) return;
+
+  // 關鍵字過濾:title + description 都搜,不分大小寫。
+  // 空字串就當作全部通過,不用 if 判斷可讀。
+  let filtered = data.filter(r => {
+    if (!keyword) return true;
+    const hay = (r.title + ' ' + r.description).toLowerCase();
+    return hay.includes(keyword);
+  });
+
+  // 排序:JS sort 就地修改,先 slice 一份免污染 cache.data 的原順序
+  filtered = filtered.slice();
+  if (sort === 'oldest') {
+    filtered.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  } else if (sort === 'top') {
+    // 支持度定義為 upvotes - downvotes;bugs 沒有這欄位所以走不到這條
+    filtered.sort((a, b) => (b.upvotes - b.downvotes) - (a.upvotes - a.downvotes));
+  } else {
+    // newest
+    filtered.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  }
+
+  if (filtered.length === 0) {
+    listEl.innerHTML = `<div class="empty">${t(keyword ? 'no_match' : 'empty')}</div>`;
     return;
   }
 
-  // 每筆生一張卡:bugs 用 renderBugCard,suggestions 用 renderSuggestionCard。
-  // 拆兩個 fn 而不是塞一個 if 是為了讓每個渲染邏輯獨立、好維護。
-  listEl.innerHTML = data.map(r => isBugs ? renderBugCard(r) : renderSuggestionCard(r)).join('');
-
-  // suggestions 卡上會有投票鈕,綁事件
+  listEl.innerHTML = filtered.map(r => isBugs ? renderBugCard(r) : renderSuggestionCard(r)).join('');
   attachVoteHandlers(listEl);
 }
 
@@ -157,7 +229,6 @@ function renderBugCard(r) {
 // ─── 建議卡片:標題 + 日期 + 投票列 ─────────────
 // 投票列跟卡片本體分開,才不會點投票鈕時被父層 <a> 連帶點成詳情連結。
 function renderSuggestionCard(r) {
-  const voted = hasVoted(r.id);
   return `
     <article class="card">
       <a class="card-body" href="?view=detail&type=suggestion&id=${r.id}">
@@ -167,23 +238,27 @@ function renderSuggestionCard(r) {
           <span class="mono">${fmtDate(r.created_at)}</span>
         </div>
       </a>
-      ${renderVotes(r, voted)}
+      ${renderVotes(r)}
     </article>
   `;
 }
 
 
 // ─── 投票列 HTML ──────────────────────────
-// voted 為真時兩顆鈕都 disabled;數字用等寬字體對齊。
-function renderVotes(r, voted) {
-  const dis = voted ? 'disabled' : '';
+// 「已投的方向」用 .voted class 標示(視覺上高亮)。
+// 使用者可以隨時再點:同方向 → 取消;不同方向 → 切換。
+// 因此鈕本身不 disable,交給前端邏輯管方向。
+function renderVotes(r) {
+  const state = getVoteState(r.id);   // 'up' | 'down' | null
+  const upCls   = state === 'up'   ? 'voted' : '';
+  const downCls = state === 'down' ? 'voted' : '';
   return `
     <div class="votes">
-      <button data-vote="up"   data-id="${r.id}" ${dis}>
+      <button data-vote="up"   data-id="${r.id}" class="${upCls}">
         <span class="vote-label">▲ ${t('upvote')}</span>
         <span class="mono" data-count>${r.upvotes}</span>
       </button>
-      <button data-vote="down" data-id="${r.id}" ${dis}>
+      <button data-vote="down" data-id="${r.id}" class="${downCls}">
         <span class="vote-label">▼ ${t('downvote')}</span>
         <span class="mono" data-count>${r.downvotes}</span>
       </button>
@@ -228,7 +303,7 @@ async function renderDetail(main, type, id) {
 
   const tag   = type === 'bug' ? `<span class="tag tag-bug">${t('tag_bug')}</span>` : '';
   const media = data.media_url ? renderMedia(data.media_url) : '';
-  const votes = type === 'suggestion' ? renderVotes(data, hasVoted(data.id)) : '';
+  const votes = type === 'suggestion' ? renderVotes(data) : '';
 
   main.innerHTML = `
     <a href="${backHref}" class="back">${t('back')}</a>
@@ -380,62 +455,136 @@ function renderSubmit(main, type) {
 
 
 // ═══════════════════════════════════════════════
-//  投票邏輯
+//  投票邏輯 — 支援收回與切換
 // ───────────────────────────────────────────────
-//  設計要點(user 明確要求):
-//    - 用 localStorage 標記投過的 id(voted_123 = '1')
-//    - 投一次後兩顆鈕鎖定,重整仍鎖 → 讀 localStorage 決定 disabled
-//    - 不做 IP 防護,localStorage 就好(不強制)
-//    - 呼叫 vote_suggestion RPC(SECURITY DEFINER,能繞 RLS 更新 upvotes)
+//  設計:
+//    - 用 localStorage 存目前投的方向(vote_123 = 'up' / 'down' / 未設定)
+//    - 使用者互動:
+//        沒投過 → 點 up   : upvotes +1  , 標記 up
+//        沒投過 → 點 down : downvotes+1  , 標記 down
+//        已 up  → 點 up   : upvotes -1  , 移除標記(收回)
+//        已 up  → 點 down : upvotes -1 , downvotes +1(切換方向)
+//        已 down→ 點 down : downvotes-1 , 移除標記(收回)
+//        已 down→ 點 up   : downvotes-1 , upvotes +1(切換方向)
+//    - 呼叫兩支 SECURITY DEFINER RPC:
+//        vote_suggestion(sid, dir)   → +1
+//        unvote_suggestion(sid, dir) → -1
+//      切換方向就先 unvote 再 vote,兩支都成功才算成功。
+//    - 不做 IP 防護,localStorage 就好(user 明確不強制)
 // ═══════════════════════════════════════════════
 
-// 檢查這台裝置是否投過某筆
-function hasVoted(id) {
-  return localStorage.getItem('voted_' + id) === '1';
+// 讀取本裝置對某筆的投票方向;沒投過回 null
+function getVoteState(id) {
+  const v = localStorage.getItem('vote_' + id);
+  return v === 'up' || v === 'down' ? v : null;
 }
 
-// 標記投過
-function markVoted(id) {
-  localStorage.setItem('voted_' + id, '1');
+function setVoteState(id, dir) {
+  if (dir === null) localStorage.removeItem('vote_' + id);
+  else              localStorage.setItem('vote_' + id, dir);
 }
 
 // 把某容器裡所有 data-vote 鈕綁上點擊處理
-// 用事件委派更省,但這裡鈕不多,直接綁清楚。
 function attachVoteHandlers(container) {
   container.querySelectorAll('[data-vote]').forEach(btn => {
     btn.addEventListener('click', onVote);
   });
 }
 
+// 呼叫 +1 RPC
+async function rpcVote(id, dir) {
+  return sb.rpc('vote_suggestion', { sid: Number(id), dir });
+}
+// 呼叫 -1 RPC
+async function rpcUnvote(id, dir) {
+  return sb.rpc('unvote_suggestion', { sid: Number(id), dir });
+}
+
 async function onVote(ev) {
   const btn = ev.currentTarget;
   const id  = btn.dataset.id;
   const dir = btn.dataset.vote;              // 'up' 或 'down'
-
-  // 重覆保護:即使 UI 沒 disable,localStorage 也擋
-  if (hasVoted(id)) return;
+  const prev = getVoteState(id);             // 'up' | 'down' | null
 
   // 先鎖 UI,避免快速連點
   const siblings = btn.parentElement.querySelectorAll('button');
   siblings.forEach(b => b.disabled = true);
 
-  // 呼叫 RPC:vote_suggestion(sid, dir)
-  const { error } = await sb.rpc('vote_suggestion', {
-    sid: Number(id),
-    dir: dir
-  });
-
-  if (error) {
-    // 失敗解鎖,讓使用者重試
-    siblings.forEach(b => b.disabled = false);
-    alert(error.message);
-    return;
+  // 依 (prev, dir) 決定要做哪幾筆 delta 操作
+  // ops 每筆是 [action, dir],action = 'vote' | 'unvote'
+  let ops = [];
+  if (prev === null) {
+    ops = [['vote', dir]];
+  } else if (prev === dir) {
+    // 收回
+    ops = [['unvote', dir]];
+  } else {
+    // 切換方向:先減舊、再加新
+    ops = [['unvote', prev], ['vote', dir]];
   }
 
-  // 成功:標記 + 本地票數 +1(避免再打一次 SELECT 拿最新值)
-  markVoted(id);
-  const countEl = btn.querySelector('[data-count]');
-  if (countEl) countEl.textContent = String(Number(countEl.textContent) + 1);
+  // 依序執行(避免同筆 row 撞資料庫寫入序);任一失敗即中斷
+  for (const [action, d] of ops) {
+    const res = action === 'vote' ? await rpcVote(id, d) : await rpcUnvote(id, d);
+    if (res.error) {
+      siblings.forEach(b => b.disabled = false);
+      alert(res.error.message);
+      return;
+    }
+  }
+
+  // 成功:同步 localStorage、本地票數、按鈕高亮狀態
+  const newState = (prev === dir) ? null : dir;
+  setVoteState(id, newState);
+  applyLocalVoteDelta(btn, prev, dir);
+
+  // 也更新 cache 內對應那筆資料的票數,避免下一次過濾/排序重繪時 UI 倒退
+  syncCacheVote(id, prev, dir);
+
+  // 解鎖(不 disable 讓使用者能收回或再改)
+  siblings.forEach(b => b.disabled = false);
+
+  // 更新兩顆鈕的 voted 樣式
+  siblings.forEach(b => {
+    b.classList.toggle('voted', b.dataset.vote === newState);
+  });
+}
+
+// 依 (prev, dir) 在本地就地調整兩顆鈕上的票數顯示,不再打 SELECT
+function applyLocalVoteDelta(clickedBtn, prev, dir) {
+  const container = clickedBtn.parentElement;
+  const upBtn   = container.querySelector('[data-vote="up"]   [data-count]');
+  const downBtn = container.querySelector('[data-vote="down"] [data-count]');
+  const bump = (el, delta) => { if (el) el.textContent = String(Math.max(0, Number(el.textContent) + delta)); };
+
+  if (prev === null) {
+    // 純新增
+    if (dir === 'up') bump(upBtn, +1); else bump(downBtn, +1);
+  } else if (prev === dir) {
+    // 收回
+    if (dir === 'up') bump(upBtn, -1); else bump(downBtn, -1);
+  } else {
+    // 切換:舊 -1、新 +1
+    if (prev === 'up') { bump(upBtn, -1); bump(downBtn, +1); }
+    else               { bump(downBtn, -1); bump(upBtn, +1); }
+  }
+}
+
+// 同步 window._listCache 內的 upvotes / downvotes,以便排序/搜尋重繪一致
+function syncCacheVote(id, prev, dir) {
+  const cache = window._listCache;
+  if (!cache || cache.isBugs) return;
+  const row = cache.data.find(r => String(r.id) === String(id));
+  if (!row) return;
+  const delta = (col, d) => { row[col] = Math.max(0, (row[col] || 0) + d); };
+  if (prev === null) {
+    delta(dir === 'up' ? 'upvotes' : 'downvotes', +1);
+  } else if (prev === dir) {
+    delta(dir === 'up' ? 'upvotes' : 'downvotes', -1);
+  } else {
+    delta(prev === 'up' ? 'upvotes' : 'downvotes', -1);
+    delta(dir  === 'up' ? 'upvotes' : 'downvotes', +1);
+  }
 }
 
 

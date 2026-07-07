@@ -70,7 +70,11 @@ async function render() {
 
   // 已登入才顯示 logout 鈕(共用頁首元件,依狀態切換顯隱)
   logoutBtn.style.display = '';
-  return renderQueue();
+
+  // 用 URL ?mode=pending / ?mode=approved 分頁,重整可回到同一分頁
+  const params = new URLSearchParams(location.search);
+  const mode = params.get('mode') === 'approved' ? 'approved' : 'pending';
+  return renderAdminList(mode);
 }
 
 
@@ -125,114 +129,163 @@ function renderLogin() {
       return;
     }
 
-    // 登入成功 → 直接重繪,會走到 renderQueue()
+    // 登入成功 → 直接重繪,會走到 renderAdminList()
     render();
   });
 }
 
 
 // ═══════════════════════════════════════════════
-//  [已登入] renderQueue
+//  [已登入] renderAdminList
 // ───────────────────────────────────────────────
-//  同時抓 bugs 與 suggestions 兩張表的 approved=false 列。
-//  兩個 query 平行跑(Promise.all)節省一個 round-trip。
-//  合併後依 created_at 排序,較舊的先審(避免積壓)。
+//  管理頁分兩種模式(用上方 tab 切換):
+//    pending  → 顯示 approved=false,提供 Approve / Reject
+//    approved → 顯示 approved=true ,提供 Edit    / Delete
+//
+//  設計要點:
+//    - 兩張表(bugs / suggestions)混排顯示,card 上標 __type
+//    - Approve 用 UPDATE approved=true;Reject 用 DELETE(未審核可直刪)
+//    - Edit 就地展開表單,存到 DB 後回到閱讀狀態
+//    - Delete 需二次確認(confirm),避免誤刪
 // ═══════════════════════════════════════════════
-async function renderQueue() {
+async function renderAdminList(mode) {
   const main = document.getElementById('main');
-  main.innerHTML = `<div class="empty">${t('loading')}</div>`;
+  const isPending = mode === 'pending';
+
+  main.innerHTML = `
+    <div class="tabs">
+      <a href="?mode=pending"  class="${isPending ? 'active' : ''}">${t('admin_tab_pending')}</a>
+      <a href="?mode=approved" class="${isPending ? '' : 'active'}">${t('admin_tab_approved')}</a>
+    </div>
+    <div class="empty">${t('loading')}</div>
+  `;
 
   // 平行抓兩張表
+  const approvedFilter = isPending ? false : true;
   const [bugsRes, sugsRes] = await Promise.all([
     sb.from('bugs')
       .select('*')
-      .eq('approved', false)
-      .order('created_at', { ascending: true }),
+      .eq('approved', approvedFilter)
+      .order('created_at', { ascending: isPending }),   // pending: 舊→新;approved: 新→舊
     sb.from('suggestions')
       .select('*')
-      .eq('approved', false)
-      .order('created_at', { ascending: true })
+      .eq('approved', approvedFilter)
+      .order('created_at', { ascending: isPending })
   ]);
 
-  // 錯誤處理:任一失敗都顯示,方便你 debug RLS 有沒有設對
   if (bugsRes.error || sugsRes.error) {
     const msg = (bugsRes.error || sugsRes.error).message;
-    main.innerHTML = `<div class="empty">${t('err_prefix')}${esc(msg)}</div>`;
+    main.innerHTML = renderTabsBar(isPending) +
+      `<div class="empty">${t('err_prefix')}${esc(msg)}</div>`;
     return;
   }
 
-  // 把兩張表的結果標上 __type 好知道要對哪張表下 update/delete
   const items = [
     ...(bugsRes.data || []).map(x => ({ ...x, __type: 'bugs' })),
     ...(sugsRes.data || []).map(x => ({ ...x, __type: 'suggestions' })),
   ];
 
-  // 依提交時間排序(舊 → 新),先進先審
-  items.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  // pending:舊 → 新(先進先審);approved:新 → 舊(較新的先看到)
+  items.sort((a, b) => isPending
+    ? new Date(a.created_at) - new Date(b.created_at)
+    : new Date(b.created_at) - new Date(a.created_at));
+
+  const heading = isPending ? t('pending_queue') : t('approved_list');
+  const emptyMsg = isPending ? t('no_pending') : t('no_approved');
 
   if (items.length === 0) {
-    main.innerHTML = `
+    main.innerHTML = renderTabsBar(isPending) + `
       <h2 style="font-family:var(--font-cond);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 20px">
-        ${t('pending_queue')}
+        ${heading}
       </h2>
-      <div class="empty">${t('no_pending')}</div>
+      <div class="empty">${emptyMsg}</div>
     `;
     return;
   }
 
-  // 渲染 title + 每一項待審卡片
-  main.innerHTML = `
+  main.innerHTML = renderTabsBar(isPending) + `
     <h2 style="font-family:var(--font-cond);text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin:0 0 20px">
-      ${t('pending_queue')} <span class="mono" style="color:var(--muted);font-size:14px">(${items.length})</span>
+      ${heading} <span class="mono" style="color:var(--muted);font-size:14px">(${items.length})</span>
     </h2>
-    ${items.map(renderPendingCard).join('')}
+    ${items.map(r => renderAdminCard(r, isPending)).join('')}
   `;
 
-  // 綁核准/拒絕鈕的事件
+  // 綁動作鈕
   main.querySelectorAll('[data-action]').forEach(btn => btn.addEventListener('click', onAction));
 }
 
 
-// ─── 單張待審卡:標題、日期、說明、媒體、核准/拒絕 ─────
-// 相比主頁的卡,這裡直接展開全文與媒體 —— 審核者需要完整資訊,不用點進詳情。
-function renderPendingCard(r) {
+// 頂部 tabs 列(用同一份 renderTabsBar 讓錯誤與空狀態頁面也帶 tabs)
+function renderTabsBar(isPending) {
+  return `
+    <div class="tabs">
+      <a href="?mode=pending"  class="${isPending ? 'active' : ''}">${t('admin_tab_pending')}</a>
+      <a href="?mode=approved" class="${isPending ? '' : 'active'}">${t('admin_tab_approved')}</a>
+    </div>
+  `;
+}
+
+
+// ─── 單張管理卡:標題、日期、說明、媒體、動作列 ─────
+// pending  模式 → Approve / Reject
+// approved 模式 → Edit    / Delete
+function renderAdminCard(r, isPending) {
   const isBug = r.__type === 'bugs';
   const tag   = isBug ? `<span class="tag tag-bug">${t('tag_bug')}</span>` : '';
   const media = r.media_url ? renderMedia(r.media_url) : '';
+  const voteInfo = !isBug
+    ? `<span class="mono" style="color:var(--muted)">▲${r.upvotes} ▼${r.downvotes}</span>`
+    : '';
+
+  const actions = isPending
+    ? `
+      <button data-action="approve" data-table="${r.__type}" data-id="${r.id}">
+        ${t('approve')}
+      </button>
+      <button data-action="reject"  data-table="${r.__type}" data-id="${r.id}">
+        ${t('reject')}
+      </button>
+    `
+    : `
+      <button data-action="edit"   data-table="${r.__type}" data-id="${r.id}">
+        ${t('edit')}
+      </button>
+      <button data-action="delete" data-table="${r.__type}" data-id="${r.id}">
+        ${t('del')}
+      </button>
+    `;
+
   return `
-    <article class="admin-card">
+    <article class="admin-card" data-card-id="${r.__type}-${r.id}">
       ${tag}
-      <h3 class="card-title">${esc(r.title)}</h3>
-      <div class="card-meta">
-        <span class="mono">#${r.id}</span>
-        <span class="mono">${fmtDate(r.created_at)}</span>
-        <span class="mono" style="color:var(--muted)">${r.__type}</span>
+      <div class="admin-view">
+        <h3 class="card-title">${esc(r.title)}</h3>
+        <div class="card-meta">
+          <span class="mono">#${r.id}</span>
+          <span class="mono">${fmtDate(r.created_at)}</span>
+          <span class="mono" style="color:var(--muted)">${r.__type}</span>
+          ${voteInfo}
+        </div>
+        <div class="detail-body">${esc(r.description)}</div>
+        ${media}
       </div>
-      <div class="detail-body">${esc(r.description)}</div>
-      ${media}
       <div class="admin-actions">
-        <button data-action="approve" data-table="${r.__type}" data-id="${r.id}">
-          ${t('approve')}
-        </button>
-        <button data-action="reject"  data-table="${r.__type}" data-id="${r.id}">
-          ${t('reject')}
-        </button>
+        ${actions}
       </div>
     </article>
   `;
 }
 
 
-// ─── 核准 / 拒絕 動作處理 ────────────────────
-// approve → UPDATE approved=true(該筆立刻出現在主頁)
-// reject  → DELETE(該筆從 DB 消失)
-// 為什麼 reject 用 DELETE 而不是 approved=false?因為它「本來就是」false,
-// 保留只會佔 DB 空間 —— user 設計就是「拒絕即刪除」。
+// ─── 動作處理:approve / reject / edit / delete ─────────
 async function onAction(ev) {
   const btn = ev.currentTarget;
   const { action, table, id } = btn.dataset;
 
-  // 鎖同一張卡上的兩顆鈕,避免重複點擊
+  if (action === 'edit')   return startEdit(btn, table, id);
+  if (action === 'delete') return doDelete(btn, table, id);
+
+  // approve / reject:先鎖鈕再送 DB
   const card = btn.closest('article');
   card.querySelectorAll('button').forEach(b => b.disabled = true);
 
@@ -244,18 +297,116 @@ async function onAction(ev) {
   }
 
   if (error) {
-    // 失敗:解鎖並提示
     card.querySelectorAll('button').forEach(b => b.disabled = false);
     alert(error.message);
     return;
   }
 
-  // 成功:直接把該卡從 DOM 移掉(不必再打一次列表)
   card.remove();
-
-  // 若整個佇列空了,顯示 no-pending 訊息
   if (document.querySelectorAll('.admin-card').length === 0) {
-    renderQueue();  // 重繪一次,會走 no-pending 那條路徑
+    // 佇列空了 → 重繪一次讓 no-pending 訊息出來
+    render();
+  }
+}
+
+
+// ─── 進入編輯模式:替換掉 admin-view 為表單 ───────────
+function startEdit(btn, table, id) {
+  const card = btn.closest('article');
+  const view = card.querySelector('.admin-view');
+  const titleEl = view.querySelector('.card-title');
+  const bodyEl  = view.querySelector('.detail-body');
+
+  // 從 DOM 讀目前顯示的內容(HTML esc 後的);先解碼再放回 input,
+  // 這樣使用者看到的是原始文字而不是 HTML entity。
+  const decode = (s) => {
+    const tmp = document.createElement('textarea');
+    tmp.innerHTML = s;
+    return tmp.value;
+  };
+  const currentTitle = decode(titleEl.innerHTML);
+  const currentBody  = decode(bodyEl.innerHTML);
+
+  // 就地換成表單 —— 保留 tag / meta,不重繪整張卡
+  view.innerHTML = `
+    <label class="edit-label">
+      <span>${t('f_title')}</span>
+      <input type="text" class="edit-title" maxlength="200" value="${esc(currentTitle)}">
+    </label>
+    <label class="edit-label">
+      <span>${t('f_desc')}</span>
+      <textarea class="edit-desc" rows="6" maxlength="4000">${esc(currentBody)}</textarea>
+    </label>
+    <div class="status edit-status"></div>
+  `;
+
+  // 換動作列:Save / Cancel
+  const actionsEl = card.querySelector('.admin-actions');
+  actionsEl.innerHTML = `
+    <button data-action="save"   data-table="${table}" data-id="${id}">${t('save')}</button>
+    <button data-action="cancel" data-table="${table}" data-id="${id}">${t('cancel')}</button>
+  `;
+  actionsEl.querySelector('[data-action=save]').addEventListener('click', doSave);
+  actionsEl.querySelector('[data-action=cancel]').addEventListener('click', () => render());
+}
+
+
+// ─── 儲存編輯 ───────────────────────────────────
+async function doSave(ev) {
+  const btn = ev.currentTarget;
+  const { table, id } = btn.dataset;
+  const card = btn.closest('article');
+  const titleInput = card.querySelector('.edit-title');
+  const bodyInput  = card.querySelector('.edit-desc');
+  const status = card.querySelector('.edit-status');
+
+  const newTitle = titleInput.value.trim();
+  const newDesc  = bodyInput.value.trim();
+
+  if (!newTitle || !newDesc) {
+    status.className = 'status edit-status err';
+    status.textContent = t('err_prefix') + 'title / description required';
+    return;
+  }
+
+  card.querySelectorAll('button').forEach(b => b.disabled = true);
+  status.className = 'status edit-status';
+  status.textContent = t('submitting');
+
+  const { error } = await sb.from(table)
+    .update({ title: newTitle, description: newDesc })
+    .eq('id', Number(id));
+
+  if (error) {
+    card.querySelectorAll('button').forEach(b => b.disabled = false);
+    status.className = 'status edit-status err';
+    status.textContent = t('err_prefix') + error.message;
+    return;
+  }
+
+  // 儲存成功 → 重繪一次讓 UI 回到閱讀狀態並拿最新資料
+  render();
+}
+
+
+// ─── 刪除:二次確認 → DB 刪 → DOM 移除 ──────────
+async function doDelete(btn, table, id) {
+  if (!confirm(t('confirm_delete'))) return;
+
+  const card = btn.closest('article');
+  card.querySelectorAll('button').forEach(b => b.disabled = true);
+
+  const { error } = await sb.from(table).delete().eq('id', Number(id));
+
+  if (error) {
+    card.querySelectorAll('button').forEach(b => b.disabled = false);
+    alert(error.message);
+    return;
+  }
+
+  card.remove();
+  if (document.querySelectorAll('.admin-card').length === 0) {
+    render();
   }
 }
 
