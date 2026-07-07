@@ -14,6 +14,42 @@
 // ================================================================
 
 
+// ─── [0] SDK 載入檢查 ────────────────────────────────────────
+// 如果兩個 CDN 都失敗 → window.supabase 是 undefined。
+// 直接 createClient 會拋 TypeError → 整支 script 中斷 → 頁面黑屏。
+// 這裡在 DOMContentLoaded 後把錯誤訊息塞進 #main,並附「重新載入」按鈕,
+// 讓使用者知道發生什麼事而不是茫然對著黑螢幕。
+function showFatalError(msgZh, msgEn) {
+  const draw = () => {
+    const main = document.getElementById('main');
+    if (!main) return;
+    main.innerHTML = `
+      <div class="fatal">
+        <div class="fatal-title">⚠ ${msgZh}</div>
+        <div class="fatal-title-en">${msgEn}</div>
+        <button onclick="location.reload()" class="btn" style="margin-top:20px">
+          重新載入 / Reload
+        </button>
+      </div>
+    `;
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', draw);
+  } else {
+    draw();
+  }
+}
+
+if (!window.supabase || typeof window.supabase.createClient !== 'function') {
+  showFatalError(
+    '網路資源載入失敗,請檢查連線後重新載入。',
+    'Failed to load required resources. Please check your connection and reload.'
+  );
+  // 中止:讓下方腳本(依賴 sb、t、applyI18n)不再執行,避免更多 TypeError 洗版
+  throw new Error('Supabase SDK not loaded');
+}
+
+
 // ─── [1] Supabase client 實體 ───────────────────────────────
 // 用 window.supabase 是因為 CDN 版把 SDK 掛在 window.supabase 上。
 // 兩頁共用同一個 client,session 也會跟著同步(admin 登入後,

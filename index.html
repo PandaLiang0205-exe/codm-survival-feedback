@@ -27,8 +27,17 @@
   </nav>
 </header>
 
-<!-- 主容器:所有動態內容都由 JS 塞進 #main -->
-<main id="main"></main>
+<!-- 主容器:所有動態內容都由 JS 塞進 #main。
+     先塞一個 loading 佔位符,萬一 JS 沒跑起來(CDN 掛/檔案 404)也不會黑屏。 -->
+<main id="main">
+  <div class="empty">Loading... 載入中...</div>
+</main>
+
+<noscript>
+  <div style="padding:40px;text-align:center;color:#d0d0d0;">
+    This site requires JavaScript. 請啟用 JavaScript。
+  </div>
+</noscript>
 
 
 <!-- ───────────────────────────────────────────────
@@ -37,8 +46,15 @@
        2. config.js    — 提供 SUPABASE_URL / KEY
        3. common.js    — 建立 sb client 與 i18n
        4. 頁面腳本      — 依 URL 參數渲染
+
+     CDN fallback: 如果主 CDN (jsDelivr) 載入失敗(偶爾會發生),
+     onerror 會同步塞入備援 CDN (unpkg) 的 script 標籤 — 這樣即使
+     單一 CDN 掛掉也不會黑屏。
      ─────────────────────────────────────────────── -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script
+  src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"
+  onerror="document.write('\x3Cscript src=\x22https://unpkg.com/@supabase/supabase-js@2\x22>\x3C/script>')">
+</script>
 <script src="config.js"></script>
 <script src="common.js"></script>
 

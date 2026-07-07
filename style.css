@@ -635,6 +635,27 @@ main {
 }
 
 
+/* ─── 致命錯誤畫面(CDN 掛掉時) ─────────────
+   放在畫面正中,提示問題並附「重新載入」按鈕 —— 這是黑屏的 UX 補救。 */
+.fatal {
+  text-align: center;
+  padding: 60px 20px;
+  font-family: var(--font-cond);
+}
+.fatal-title {
+  font-size: 20px;
+  color: var(--bug);
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+}
+.fatal-title-en {
+  font-size: 13px;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+  font-family: var(--font-mono);
+}
+
+
 /* ─── 小螢幕 ───────────────────────────── */
 @media (max-width: 520px) {
   header { padding: 12px 14px; }

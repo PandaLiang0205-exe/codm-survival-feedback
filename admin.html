@@ -24,9 +24,21 @@
   </nav>
 </header>
 
-<main id="main"></main>
+<main id="main">
+  <div class="empty">Loading... 載入中...</div>
+</main>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<noscript>
+  <div style="padding:40px;text-align:center;color:#d0d0d0;">
+    This site requires JavaScript. 請啟用 JavaScript。
+  </div>
+</noscript>
+
+<!-- CDN fallback: 主 CDN fail → 換 unpkg,避免黑屏 -->
+<script
+  src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"
+  onerror="document.write('\x3Cscript src=\x22https://unpkg.com/@supabase/supabase-js@2\x22>\x3C/script>')">
+</script>
 <script src="config.js"></script>
 <script src="common.js"></script>
 
