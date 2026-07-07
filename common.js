@@ -14,11 +14,9 @@
 // ================================================================
 
 
-// ─── [0] SDK 載入檢查 ────────────────────────────────────────
-// 如果兩個 CDN 都失敗 → window.supabase 是 undefined。
-// 直接 createClient 會拋 TypeError → 整支 script 中斷 → 頁面黑屏。
-// 這裡在 DOMContentLoaded 後把錯誤訊息塞進 #main,並附「重新載入」按鈕,
-// 讓使用者知道發生什麼事而不是茫然對著黑螢幕。
+// ─── [0] Fatal error UI ──────────────────────────────────────
+// 兩支 CDN 都超時的話,把訊息塞進 #main 並附「重新載入」按鈕,
+// 讓使用者知道發生什麼事而不是茫然對著 Loading 或黑螢幕。
 function showFatalError(msgZh, msgEn) {
   const draw = () => {
     const main = document.getElementById('main');
@@ -40,24 +38,32 @@ function showFatalError(msgZh, msgEn) {
   }
 }
 
-if (!window.supabase || typeof window.supabase.createClient !== 'function') {
-  showFatalError(
-    '網路資源載入失敗,請檢查連線後重新載入。',
-    'Failed to load required resources. Please check your connection and reload.'
-  );
-  // 中止:讓下方腳本(依賴 sb、t、applyI18n)不再執行,避免更多 TypeError 洗版
-  throw new Error('Supabase SDK not loaded');
-}
 
-
-// ─── [1] Supabase client 實體 ───────────────────────────────
-// 用 window.supabase 是因為 CDN 版把 SDK 掛在 window.supabase 上。
-// 兩頁共用同一個 client,session 也會跟著同步(admin 登入後,
-// 若同分頁開 index.html 也會被視為登入,但 index 不看 session,無影響)。
-const sb = window.supabase.createClient(
-  window.SUPABASE_URL,
-  window.SUPABASE_ANON_KEY
-);
+// ─── [1] Supabase client 實體(延遲初始化)─────────────────
+// SDK 現在由 <head> 的 bootstrap loader 非同步載入(見兩頁 head),
+// 所以 common.js 執行時 window.supabase 可能還沒好。
+// 用 let 宣告 sb,等 __sdkReady 決議後再 createClient。
+//
+// 這樣做的重點:
+//   - 所有需要 sb 的呼叫都應該掛在 window.__sdkReady 上(見 index.html
+//     與 admin.html 結尾的 render() 呼叫);到那時 sb 已經賦值完成。
+//   - .then 依照註冊順序執行 → common.js 這支 .then 先跑(建 client),
+//     頁面腳本的 .then 後跑(呼叫 render),順序不會錯。
+let sb;
+window.__sdkReady
+  .then(() => {
+    sb = window.supabase.createClient(
+      window.SUPABASE_URL,
+      window.SUPABASE_ANON_KEY
+    );
+  })
+  .catch(() => {
+    // 兩支 CDN 都掛才會走到這裡。顯示 fatal error 讓使用者可以按重新載入。
+    showFatalError(
+      '網路資源載入失敗,請檢查連線後重新載入。',
+      'Failed to load required resources. Please check your connection and reload.'
+    );
+  });
 
 
 // ─── [2] 中英雙語字典 ───────────────────────────────────────

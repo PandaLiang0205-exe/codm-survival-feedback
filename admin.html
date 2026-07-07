@@ -9,7 +9,54 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
+  <!-- Supabase CDN 預連線:見 index.html 內同段註解 -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="preconnect" href="https://unpkg.com" crossorigin>
+
   <link rel="stylesheet" href="style.css">
+
+  <!-- ═══════════════════════════════════════════════════════════
+       Supabase SDK bootstrap loader
+       ───────────────────────────────────────────────────────────
+       與 index.html 內容一致,細節請看那邊的註解。簡述:
+         主 CDN(jsDelivr)4 秒沒回應 → 自動切 unpkg,兩支都掛才報錯。
+       這樣可解決「首次點開卡在 Loading、重整才有畫面」的問題。
+       ═══════════════════════════════════════════════════════════ -->
+  <script>
+  (function bootstrapSupabase() {
+    const CDNS = [
+      'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2',
+      'https://unpkg.com/@supabase/supabase-js@2'
+    ];
+    const TIMEOUT_MS = 4000;
+    window.__sdkReady = new Promise((resolve, reject) => {
+      let idx = 0;
+      (function tryNext() {
+        if (idx >= CDNS.length) return reject(new Error('all-cdn-failed'));
+        const url = CDNS[idx++];
+        const s = document.createElement('script');
+        s.src = url;
+        const timer = setTimeout(() => {
+          s.onload = s.onerror = null;
+          s.remove();
+          console.warn('[sdk] timeout on', url);
+          tryNext();
+        }, TIMEOUT_MS);
+        s.onload = () => {
+          clearTimeout(timer);
+          console.log('[sdk] loaded from', url);
+          resolve();
+        };
+        s.onerror = () => {
+          clearTimeout(timer);
+          console.warn('[sdk] error on', url);
+          tryNext();
+        };
+        document.head.appendChild(s);
+      })();
+    });
+  })();
+  </script>
 </head>
 <body>
 
@@ -34,11 +81,9 @@
   </div>
 </noscript>
 
-<!-- CDN fallback: 主 CDN fail → 換 unpkg,避免黑屏 -->
-<script
-  src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"
-  onerror="document.write('\x3Cscript src=\x22https://unpkg.com/@supabase/supabase-js@2\x22>\x3C/script>')">
-</script>
+<!-- Supabase SDK 由 <head> 內的 bootstrap loader 載入,結果透過
+     window.__sdkReady Promise 回報。config.js / common.js 不依賴 SDK,
+     可以先跑;需要 sb 的動作全部掛在 __sdkReady 上等 SDK 好了才做。 -->
 <script src="config.js"></script>
 <script src="common.js"></script>
 
@@ -469,7 +514,11 @@ document.getElementById('logout').addEventListener('click', async () => {
 
 
 // ─── 啟動 ────────────────────────────────
-render();
+// 等 SDK 從 CDN 載完才能開始 render(sb 需要 window.supabase)。
+// 兩支 CDN 都掛的話 common.js 已幫忙顯示 fatal error,這裡略過。
+window.__sdkReady
+  .then(() => render())
+  .catch(() => console.error('[app] SDK 無法載入,已顯示 fatal error'));
 </script>
 
 </body>
