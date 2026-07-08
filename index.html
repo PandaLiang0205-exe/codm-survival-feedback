@@ -82,7 +82,7 @@
   <div class="brand" data-i18n="brand_home">【生存模式回饋系統】</div>
   <nav>
     <a href="index.html" data-i18n="nav_home">Home</a>
-    <a href="admin.html" data-i18n="nav_admin">Admin</a>
+    <a href="admin.html" id="admin-link"><span data-i18n="nav_admin">Admin</span><span id="admin-badge" class="badge" hidden></span></a>
     <button id="lang-toggle" data-i18n="lang_toggle">中文</button>
   </nav>
 </header>
@@ -136,6 +136,10 @@ async function render() {
   // 用 sessionStorage(不是 localStorage) → 關掉分頁就重置,對「訪問人次」定義較合理。
   maybeIncrementVisits();
 
+  // 已登入管理員 → 檢查是否有待審核項目,有的話在「管理」按鈕上顯示紅色數字徽章。
+  // 不 await:徽章是提示性資訊,查詢慢一點不該擋住主頁渲染。
+  refreshAdminBadge();
+
   const params = new URLSearchParams(location.search);
   const view = params.get('view') || 'list';
   const type = params.get('type');
@@ -180,6 +184,54 @@ function maybeIncrementVisits() {
 }
 // 把入口暴露給 common.js 的語言切換用
 window.rerender = render;
+
+
+// ─── 管理員待審核徽章 ─────────────────────────
+// 只有登入的管理員看得到「管理」旁邊的紅色數字。
+//
+// 原理:
+//   - RLS 政策:anon 只讀 approved=true;authenticated 可讀全表。
+//     所以未登入時查 approved=false 會拿到 0 筆(不是錯誤)→ 徽章自然隱藏。
+//   - 這裡明確先看 session,登出狀態直接跳過查詢,省一次 DB 往返。
+//
+// 查詢用 head:true + count:'exact' → 只回 count,不拉資料本體,最省頻寬。
+async function refreshAdminBadge() {
+  const badge = document.getElementById('admin-badge');
+  if (!badge) return;
+
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) {
+    badge.hidden = true;
+    return;
+  }
+
+  // 平行查兩張表的待審核筆數
+  const [bugsRes, sugsRes] = await Promise.all([
+    sb.from('bugs').select('*', { count: 'exact', head: true }).eq('approved', false),
+    sb.from('suggestions').select('*', { count: 'exact', head: true }).eq('approved', false),
+  ]);
+
+  // 有任一表查詢失敗就靜默不顯示 —— 徽章是輔助資訊,錯誤不該讓使用者面對紅字警告
+  if (bugsRes.error || sugsRes.error) {
+    badge.hidden = true;
+    return;
+  }
+
+  const total = (bugsRes.count || 0) + (sugsRes.count || 0);
+  if (total > 0) {
+    // 99+ 上限:避免有一天累積上千筆時 badge 撐開頁首破版
+    badge.textContent = total > 99 ? '99+' : String(total);
+    badge.hidden = false;
+  } else {
+    badge.hidden = true;
+  }
+}
+
+// 登入/登出狀態改變時即時更新徽章 —— 例如使用者在另一分頁登出,
+// 這一頁下次拿到 auth event 也會把徽章清掉。
+window.__sdkReady.then(() => {
+  sb.auth.onAuthStateChange(() => refreshAdminBadge());
+});
 
 
 // ═══════════════════════════════════════════════

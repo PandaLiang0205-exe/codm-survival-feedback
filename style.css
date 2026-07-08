@@ -106,6 +106,27 @@ nav a:hover, nav button:hover {
   border-color: rgba(230, 57, 70, 0.45);
 }
 
+/* Admin 待審核徽章 —— 只在管理員登入 + 有待審核項目時顯示。
+   用 --bug 紅色貼在 Admin 文字後面,呼應戰術 HUD 警示語意。
+   小方塊 + 等寬白字,克制不搶主色。 */
+.badge {
+  display: inline-block;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 6px;
+  background: var(--bug);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  letter-spacing: 0;
+  vertical-align: middle;
+}
+.badge[hidden] { display: none; }
+
 
 /* ─── 內容主容器 ────────────────────────────── */
 main {
