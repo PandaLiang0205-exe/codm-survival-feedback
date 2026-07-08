@@ -189,49 +189,44 @@ window.rerender = render;
 // ─── 管理員待審核徽章 ─────────────────────────
 // 只有登入的管理員看得到「管理」旁邊的紅色數字。
 //
-// 原理:
-//   - RLS 政策:anon 只讀 approved=true;authenticated 可讀全表。
-//     所以未登入時查 approved=false 會拿到 0 筆(不是錯誤)→ 徽章自然隱藏。
-//   - 這裡明確先看 session,登出狀態直接跳過查詢,省一次 DB 往返。
+// 用 RLS 當守門,不用手動查 auth session:
+//   - anon 只能 SELECT approved=true → 加 .eq('approved', false) 回 0 筆
+//   - authenticated 全部可讀 → 回真實 pending 數
+// 這樣做的好處是完全避開 sb.auth.getSession() —— 之前那版在登入狀態下
+// 會觸發 token 刷新事件,和 onAuthStateChange 監聽器互相激發造成主頁
+// 卡在 "載入中...",移除 auth 依賴後就沒事了。
 //
-// 查詢用 head:true + count:'exact' → 只回 count,不拉資料本體,最省頻寬。
+// 徽章只在頁面載入時計算一次;要更新只要重新整理(登入/登出本來就會換頁)。
 async function refreshAdminBadge() {
   const badge = document.getElementById('admin-badge');
   if (!badge) return;
 
-  const { data: { session } } = await sb.auth.getSession();
-  if (!session) {
-    badge.hidden = true;
-    return;
-  }
+  try {
+    // head:true + count:'exact' → 只回 count 不拉資料本體,省頻寬
+    const [bugsRes, sugsRes] = await Promise.all([
+      sb.from('bugs').select('*', { count: 'exact', head: true }).eq('approved', false),
+      sb.from('suggestions').select('*', { count: 'exact', head: true }).eq('approved', false),
+    ]);
 
-  // 平行查兩張表的待審核筆數
-  const [bugsRes, sugsRes] = await Promise.all([
-    sb.from('bugs').select('*', { count: 'exact', head: true }).eq('approved', false),
-    sb.from('suggestions').select('*', { count: 'exact', head: true }).eq('approved', false),
-  ]);
+    // 任一表查詢失敗就靜默不顯示 —— 徽章是輔助資訊,錯誤不該讓使用者看到紅字
+    if (bugsRes.error || sugsRes.error) {
+      badge.hidden = true;
+      return;
+    }
 
-  // 有任一表查詢失敗就靜默不顯示 —— 徽章是輔助資訊,錯誤不該讓使用者面對紅字警告
-  if (bugsRes.error || sugsRes.error) {
-    badge.hidden = true;
-    return;
-  }
-
-  const total = (bugsRes.count || 0) + (sugsRes.count || 0);
-  if (total > 0) {
-    // 99+ 上限:避免有一天累積上千筆時 badge 撐開頁首破版
-    badge.textContent = total > 99 ? '99+' : String(total);
-    badge.hidden = false;
-  } else {
+    const total = (bugsRes.count || 0) + (sugsRes.count || 0);
+    if (total > 0) {
+      // 99+ 上限:避免累積上千筆時 badge 撐開頁首破版
+      badge.textContent = total > 99 ? '99+' : String(total);
+      badge.hidden = false;
+    } else {
+      badge.hidden = true;
+    }
+  } catch (_) {
+    // 網路異常等意外一律靜默隱藏
     badge.hidden = true;
   }
 }
-
-// 登入/登出狀態改變時即時更新徽章 —— 例如使用者在另一分頁登出,
-// 這一頁下次拿到 auth event 也會把徽章清掉。
-window.__sdkReady.then(() => {
-  sb.auth.onAuthStateChange(() => refreshAdminBadge());
-});
 
 
 // ═══════════════════════════════════════════════
